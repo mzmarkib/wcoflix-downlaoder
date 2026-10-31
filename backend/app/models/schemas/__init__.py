@@ -1,5 +1,5 @@
 # Wcoflix Downloader - Models/Schemas exports
-from app.models.schemas.schemas import (
+from .schemas import (
     Language,
     Season,
     EpisodeInfo,
