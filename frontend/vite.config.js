@@ -14,7 +14,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'build',
-    sourcemap: true
+    sourcemap: true,
+    assetsDir: 'static'
   },
   esbuild: {
     loader: 'tsx',
