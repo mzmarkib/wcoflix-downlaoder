@@ -1,7 +1,6 @@
 # Wcoflix Downloader - Models exports
 from app.models.schemas import (
     Language,
-    Season,
     EpisodeInfo,
     AnimeInfo,
     ScrapeRequest,
@@ -13,7 +12,6 @@ from app.models.schemas import (
 
 __all__ = [
     "Language",
-    "Season",
     "EpisodeInfo",
     "AnimeInfo",
     "ScrapeRequest",
