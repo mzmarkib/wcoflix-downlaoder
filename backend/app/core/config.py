@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, List
+import json
 
 
 class Settings(BaseSettings):
@@ -17,8 +18,24 @@ class Settings(BaseSettings):
     proxy_url: Optional[str] = None
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
-    # CORS
-    cors_origins: list[str] = ["*"]
+    # CORS - accept comma-separated or JSON array
+    cors_origins: str = "*"
+    
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse cors_origins as comma-separated or JSON array."""
+        val = self.cors_origins.strip()
+        if not val:
+            return []
+        try:
+            # Try JSON first
+            parsed = json.loads(val)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        # Fall back to comma-separated
+        return [v.strip() for v in val.split(",") if v.strip()]
     
     class Config:
         env_file = ".env"
