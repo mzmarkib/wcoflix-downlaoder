@@ -36,6 +36,7 @@ interface AnimeInfo {
   genres: string[]
   episodes: EpisodeInfo[]
   total_episodes: number
+  seasons: number[]  // Detected seasons from the page
 }
 
 interface DownloadResult {
@@ -48,7 +49,7 @@ function App() {
   // State
   const [url, setUrl] = useState('')
   const [language, setLanguage] = useState<'sub' | 'dub' | 'all'>('sub')
-  const [season, setSeason] = useState<'all' | '1' | '2' | '3'>('all')
+  const [season, setSeason] = useState<string>('all')
   
   const [animeInfo, setAnimeInfo] = useState<AnimeInfo | null>(null)
   const [episodes, setEpisodes] = useState<EpisodeDownloadInfo[]>([])
@@ -60,6 +61,9 @@ function App() {
   
   const [downloadResult, setDownloadResult] = useState<DownloadResult | null>(null)
   const [generatingDownloads, setGeneratingDownloads] = useState(false)
+
+  // Update available seasons when anime info changes
+  const availableSeasons = animeInfo?.seasons || [1]
 
   // API calls
   const scrapeAnime = useCallback(async () => {
@@ -261,13 +265,18 @@ function App() {
               id="season"
               className="select"
               value={season}
-              onChange={(e) => setSeason(e.target.value as 'all' | '1' | '2' | '3')}
+              onChange={(e) => setSeason(e.target.value)}
             >
               <option value="all">All Seasons</option>
-              <option value="1">Season 1</option>
-              <option value="2">Season 2</option>
-              <option value="3">Season 3</option>
+              {availableSeasons.map((s) => (
+                <option key={s} value={String(s)}>Season {s}</option>
+              ))}
             </select>
+            {availableSeasons.length > 1 && (
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>
+                Detected: {availableSeasons.join(', ')}
+              </span>
+            )}
           </div>
         </div>
 
@@ -341,7 +350,7 @@ function App() {
                   {selectedEpisodes.size} selected
                 </span>
               </div>
-              
+             
               <button
                 className="btn btn-success"
                 onClick={generateDownloads}
@@ -377,13 +386,18 @@ function App() {
                   onChange={() => toggleEpisodeSelection(index)}
                   style={{ width: '18px', height: '18px', accentColor: 'var(--accent)', flexShrink: 0 }}
                 />
-                
+               
                 <div className="episode-info" style={{ flex: 1, minWidth: 0 }}>
                   <div className="episode-title">
                     {epInfo.episode.title}
                     {epInfo.episode.season && epInfo.episode.episode && (
                       <span style={{ marginLeft: '8px', color: 'var(--text-secondary)', fontWeight: '400' }}>
                         S{epInfo.episode.season}E{String(epInfo.episode.episode).padStart(2, '0')}
+                      </span>
+                    )}
+                    {epInfo.episode.episode && !epInfo.episode.season && (
+                      <span style={{ marginLeft: '8px', color: 'var(--text-secondary)', fontWeight: '400' }}>
+                        Ep {epInfo.episode.episode}
                       </span>
                     )}
                   </div>
@@ -416,7 +430,7 @@ function App() {
                 </div>
               </div>
             ))}
-            
+           
             {episodes.length === 0 && scrapingStatus === 'done' && (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
                 <Info size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
@@ -434,7 +448,7 @@ function App() {
             <CheckCircle size={20} style={{ color: 'var(--success)', marginRight: '8px', verticalAlign: 'middle' }} />
             Download Files Ready
           </h2>
-          
+         
           <div className="download-options">
             {Object.entries(downloadResult.files).map(([key, file]) => {
               const info = formatTypeLabels[key]

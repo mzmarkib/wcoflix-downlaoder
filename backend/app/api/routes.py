@@ -6,7 +6,7 @@ import os
 
 from app.models.schemas import (
     ScrapeRequest, AnimeInfo, EpisodeDownloadInfo, 
-    BatchDownloadRequest, BatchDownloadResponse, Language, Season
+    BatchDownloadRequest, BatchDownloadResponse, Language
 )
 from app.services.scraper import scraper
 from app.services.download_generator import DownloadFileGenerator
@@ -26,7 +26,7 @@ async def scrape_anime(request: ScrapeRequest):
         anime = scraper.parse_anime_page(
             str(request.url), 
             language=request.language, 
-            season=request.season.value
+            season=request.season or "all"
         )
         return anime
     except Exception as e:
@@ -42,7 +42,7 @@ async def scrape_episodes(request: ScrapeRequest):
         anime = scraper.parse_anime_page(
             str(request.url), 
             language=request.language, 
-            season=request.season.value
+            season=request.season or "all"
         )
         
         # Then get video sources for each episode

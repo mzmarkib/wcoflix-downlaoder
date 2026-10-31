@@ -9,13 +9,6 @@ class Language(str, Enum):
     all = "all"
 
 
-class Season(str, Enum):
-    all = "all"
-    season_1 = "1"
-    season_2 = "2"
-    season_3 = "3"
-
-
 class EpisodeInfo(BaseModel):
     title: str
     url: HttpUrl
@@ -32,12 +25,13 @@ class AnimeInfo(BaseModel):
     genres: List[str] = []
     episodes: List[EpisodeInfo] = []
     total_episodes: int = 0
+    seasons: List[int] = []  # Detected seasons from the page
 
 
 class ScrapeRequest(BaseModel):
     url: HttpUrl
     language: Language = Language.sub
-    season: Season = Season.all
+    season: Optional[str] = "all"  # Dynamic: "all" or specific season number
 
 
 class VideoSource(BaseModel):

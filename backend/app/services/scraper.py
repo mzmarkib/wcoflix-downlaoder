@@ -4,7 +4,8 @@ from bs4 import BeautifulSoup
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 import logging
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import httpx
 
 from app.core.config import settings
 from app.models.schemas import EpisodeInfo, AnimeInfo, Language, VideoSource, EpisodeDownloadInfo
@@ -34,11 +35,19 @@ class WcoflixScraper:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=2, max=10)
+        wait=wait_exponential(multiplier=2, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPError, ConnectionError, TimeoutError))
     )
     def _get(self, url: str) -> BeautifulSoup:
         response = self.session.get(url, timeout=settings.request_timeout)
         response.raise_for_status()
+        
+        # Check if we hit Cloudflare challenge
+        if 'challenge-platform' in response.text or 'Cloudflare' in response.text:
+            # Check if it's actually the challenge page (not the real content)
+            if len(response.text) < 5000 and 'challenge' in response.text.lower():
+                raise ConnectionError("Cloudflare challenge page detected")
+        
         return BeautifulSoup(response.text, 'lxml')
 
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
@@ -77,6 +86,9 @@ class WcoflixScraper:
         genre_elems = soup.select('a[href*="genre"], .genre a, .genres a')
         genres = [g.get_text(strip=True) for g in genre_elems]
         
+        # Extract available seasons from the page
+        detected_seasons = self._detect_seasons(soup)
+        
         # Extract episode links
         episodes = self._extract_episodes(soup, language)
         
@@ -86,15 +98,53 @@ class WcoflixScraper:
             description=description,
             genres=genres,
             episodes=episodes,
-            total_episodes=len(episodes)
+            total_episodes=len(episodes),
+            seasons=detected_seasons
         )
+
+    def _detect_seasons(self, soup: BeautifulSoup) -> List[int]:
+        """Detect available seasons from the page tabs/filters."""
+        seasons = set()
+        
+        # Method 1: Look for season tabs/buttons
+        season_tabs = soup.select('[data-season], .season-tab, .season-btn, .season-filter a, [href*="season="]')
+        for tab in season_tabs:
+            # Check data-season attribute
+            data_season = tab.get('data-season')
+            if data_season and data_season.isdigit():
+                seasons.add(int(data_season))
+            
+            # Check href for season parameter
+            href = tab.get('href', '')
+            season_match = re.search(r'season[=-](\d+)', href)
+            if season_match:
+                seasons.add(int(season_match.group(1)))
+            
+            # Check text content
+            text = tab.get_text(strip=True)
+            season_match = re.search(r'Season\s+(\d+)', text, re.IGNORECASE)
+            if season_match:
+                seasons.add(int(season_match.group(1)))
+        
+        # Method 2: Extract from episode URLs in the page
+        episode_links = soup.select('a[href*="episode"]')
+        for link in episode_links:
+            href = link.get('href', '')
+            season_match = re.search(r'season[_-]?(\d+)', href, re.IGNORECASE)
+            if season_match:
+                seasons.add(int(season_match.group(1)))
+        
+        # If no seasons detected, default to [1]
+        if not seasons:
+            seasons.add(1)
+        
+        return sorted(seasons)
 
     def _extract_episodes(self, soup: BeautifulSoup, language: Language) -> List[EpisodeInfo]:
         """Extract episode links from the anime page."""
         episodes = []
         
-        # Find all episode links - they're typically in a list with specific patterns
-        # Looking for links like: https://www.wcoflix.tv/anime-name-season-X-episode-Y-english-subbed
+        # Find all episode links
         episode_links = soup.select('a[href*="episode"]')
         
         seen_urls = set()
@@ -123,7 +173,8 @@ class WcoflixScraper:
         # URL patterns:
         # /the-apothecary-diaries-season-3-episode-5-english-subbed
         # /kusuriya-no-hitorigoto-season-2-episode-24-english-subbed
-        # /the-apothecary-diaries-episode-24-english-dubbed (season 1)
+        # /the-apothecary-diaries-episode-24-english-dubbed (season 1, no season in URL)
+        # /chibi-godzilla-raids-again-episode-119-english-subbed (no season)
         
         season_match = re.search(r'season[_-]?(\d+)', url, re.IGNORECASE)
         episode_match = re.search(r'episode[_-]?(\d+)', url, re.IGNORECASE)
@@ -134,7 +185,7 @@ class WcoflixScraper:
         if not episode_match:
             episode_match = re.search(r'Episode\s+(\d+)', text, re.IGNORECASE)
         
-        season = int(season_match.group(1)) if season_match else 1
+        season = int(season_match.group(1)) if season_match else None
         episode = int(episode_match.group(1)) if episode_match else None
         
         # Determine language from URL/text
@@ -147,7 +198,14 @@ class WcoflixScraper:
         # Clean title
         title = text.replace('FullHD', '').strip()
         if not title:
-            title = f"Season {season} Episode {episode}" if episode else f"Season {season}"
+            if season and episode:
+                title = f"Season {season} Episode {episode}"
+            elif episode:
+                title = f"Episode {episode}"
+            elif season:
+                title = f"Season {season}"
+            else:
+                title = "Unknown Episode"
         
         return EpisodeInfo(
             title=title,
@@ -176,7 +234,6 @@ class WcoflixScraper:
         for iframe in soup.select('iframe'):
             src = iframe.get('src') or iframe.get('data-src')
             if src and any(domain in src for domain in ['wcostream', 'vidstream', 'stream', 'embed']):
-                # This is an embed URL, we'd need to follow it
                 sources.append(VideoSource(quality="Auto", url=src, type="embed"))
         
         # Method 3: Look for download links
@@ -190,7 +247,6 @@ class WcoflixScraper:
         scripts = soup.find_all('script')
         for script in scripts:
             if script.string:
-                # Look for m3u8, mp4 URLs in script content
                 urls = re.findall(r'https?://[^\s"\']+\.(?:m3u8|mp4|webm)', script.string)
                 for url in urls:
                     quality = self._guess_quality(url)
