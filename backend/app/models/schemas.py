@@ -32,6 +32,7 @@ class ScrapeRequest(BaseModel):
     url: HttpUrl
     language: Language = Language.sub
     season: Optional[str] = "all"  # Dynamic: "all" or specific season number
+    proxy_url: Optional[str] = None  # Optional per-request proxy override
 
 
 class VideoSource(BaseModel):

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from typing import List
+from typing import List, Optional
 import logging
 import uuid
 import os
@@ -19,11 +19,21 @@ router = APIRouter(prefix="/api", tags=["downloader"])
 jobs = {}
 
 
+def _get_scraper(proxy_url: Optional[str] = None):
+    """Get scraper instance with optional proxy override."""
+    if proxy_url:
+        # Create a new scraper with the proxy
+        from app.services.scraper import WcoflixScraper
+        return WcoflixScraper(proxy_url=proxy_url)
+    return scraper
+
+
 @router.post("/scrape", response_model=AnimeInfo)
 async def scrape_anime(request: ScrapeRequest):
     """Scrape anime page to get episode list."""
     try:
-        anime = scraper.parse_anime_page(
+        s = _get_scraper(request.proxy_url)
+        anime = s.parse_anime_page(
             str(request.url), 
             language=request.language, 
             season=request.season or "all"
@@ -38,8 +48,9 @@ async def scrape_anime(request: ScrapeRequest):
 async def scrape_episodes(request: ScrapeRequest):
     """Scrape anime page and extract video sources for all episodes."""
     try:
+        s = _get_scraper(request.proxy_url)
         # First get anime info with episode list
-        anime = scraper.parse_anime_page(
+        anime = s.parse_anime_page(
             str(request.url), 
             language=request.language, 
             season=request.season or "all"
@@ -48,7 +59,7 @@ async def scrape_episodes(request: ScrapeRequest):
         # Then get video sources for each episode
         results = []
         for episode in anime.episodes:
-            ep_info = scraper.get_episode_download_info(episode)
+            ep_info = s.get_episode_download_info(episode)
             results.append(ep_info)
         
         return results
@@ -58,10 +69,11 @@ async def scrape_episodes(request: ScrapeRequest):
 
 
 @router.post("/scrape/episode/{episode_url:path}")
-async def scrape_single_episode(episode_url: str):
+async def scrape_single_episode(episode_url: str, proxy_url: Optional[str] = None):
     """Scrape a single episode for video sources."""
     try:
         from app.models.schemas import EpisodeInfo, Language
+        s = _get_scraper(proxy_url)
         
         # Create a minimal episode info
         ep = EpisodeInfo(
@@ -70,7 +82,7 @@ async def scrape_single_episode(episode_url: str):
             language=Language.sub
         )
         
-        ep_info = scraper.get_episode_download_info(ep)
+        ep_info = s.get_episode_download_info(ep)
         return ep_info
     except Exception as e:
         logger.error(f"Single episode scrape error: {e}")

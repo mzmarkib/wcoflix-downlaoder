@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class WcoflixScraper:
-    def __init__(self):
+    def __init__(self, proxy_url: Optional[str] = None):
         self.session = cloudscraper.create_scraper(
             browser={
                 'browser': 'chrome',
@@ -30,8 +30,10 @@ class WcoflixScraper:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
         })
-        if settings.proxy_url:
-            self.session.proxies = {'http': settings.proxy_url, 'https': settings.proxy_url}
+        # Use provided proxy or fall back to settings
+        effective_proxy = proxy_url or settings.proxy_url
+        if effective_proxy:
+            self.session.proxies = {'http': effective_proxy, 'https': effective_proxy}
 
     @retry(
         stop=stop_after_attempt(3),
