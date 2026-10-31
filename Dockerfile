@@ -46,12 +46,16 @@ RUN mkdir -p /tmp/wcoflix_downloads && chown -R appuser:appuser /tmp/wcoflix_dow
 # Switch to non-root user
 USER appuser
 
+# Set Python path to include backend directory
+ENV PYTHONPATH=/app/backend
+
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check - use curl to check the health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 
-# Run the application
+# Run the application from the backend directory
+WORKDIR /app/backend
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
