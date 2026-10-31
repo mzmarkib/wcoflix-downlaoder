@@ -1,5 +1,14 @@
 # Wcoflix Downloader - Models/Schemas exports
-from .schemas import (
+# Import directly from the schemas module file
+import sys
+import os
+
+# Add the schemas directory to path
+schemas_dir = os.path.dirname(__file__)
+if schemas_dir not in sys.path:
+    sys.path.insert(0, schemas_dir)
+
+from schemas import (
     Language,
     Season,
     EpisodeInfo,
