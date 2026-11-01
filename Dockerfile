@@ -16,13 +16,13 @@ WORKDIR /app/backend
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Install Playwright browsers in builder stage
-RUN python -m playwright install --with-deps chromium
+# Install Playwright browsers in builder stage (without --with-deps to avoid font issues)
+RUN python -m playwright install chromium
 
 # Final stage
 FROM python:3.12-slim
 
-# Install runtime dependencies + Playwright dependencies
+# Install runtime dependencies for Playwright (minimal set, avoiding broken font packages)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -42,6 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libatspi2.0-0 \
+    fonts-liberation \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
