@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { 
-  Search, Download, Loader2, CheckCircle, AlertCircle, RefreshCw, 
+  Search, Download, Loader2, CheckCircle, AlertCircle, RefreshCw, Square, 
   Info, FileText, Zap, Globe, ExternalLink, Settings, Wifi, WifiOff
 } from 'lucide-react'
 import axios from 'axios'
@@ -76,6 +76,9 @@ function App() {
   
   const [downloadResult, setDownloadResult] = useState<DownloadResult | null>(null)
   const [generatingDownloads, setGeneratingDownloads] = useState(false)
+  
+  // Abort controllers for canceling requests
+  const [scrapeAbortController, setScrapeAbortController] = useState<AbortController | null>(null)
 
   const availableSeasons = animeInfo?.seasons || []
   const hasScraped = animeInfo !== null
@@ -104,6 +107,10 @@ function App() {
   const scrapeAnime = useCallback(async () => {
     if (!url.trim()) return
     
+    // Create new abort controller for this scrape
+    const abortController = new AbortController()
+    setScrapeAbortController(abortController)
+    
     setScrapingStatus('anime')
     setScrapingProgress(0)
     setScrapingError(null)
@@ -118,18 +125,30 @@ function App() {
         language,
         season,
         proxy_url: proxyUrl || undefined
-      })
+      }, { signal: abortController.signal })
       setAnimeInfo(response.data)
       setScrapingStatus('done')
       setScrapingProgress(100)
+      setScrapeAbortController(null)
     } catch (err: any) {
-      setScrapingError(err.response?.data?.detail || err.message)
-      setScrapingStatus('error')
+      if (err.name === 'AbortError' || err.name === 'CanceledError') {
+        setScrapingStatus('idle')
+        setScrapingProgress(0)
+        setScrapingError('Scraping cancelled by user')
+      } else {
+        setScrapingError(err.response?.data?.detail || err.message)
+        setScrapingStatus('error')
+      }
+      setScrapeAbortController(null)
     }
   }, [url, language, season, proxyUrl])
 
   const scrapeEpisodes = useCallback(async () => {
     if (!animeInfo) return
+    
+    // Create new abort controller for this scrape
+    const abortController = new AbortController()
+    setScrapeAbortController(abortController)
     
     setScrapingStatus('episodes')
     setScrapingProgress(0)
@@ -141,7 +160,7 @@ function App() {
         language,
         season,
         proxy_url: proxyUrl || undefined
-      })
+      }, { signal: abortController.signal })
       
       const episodesData = response.data
       setEpisodes(episodesData)
@@ -151,9 +170,17 @@ function App() {
       
       setScrapingStatus('done')
       setScrapingProgress(100)
+      setScrapeAbortController(null)
     } catch (err: any) {
-      setScrapingError(err.response?.data?.detail || err.message)
-      setScrapingStatus('error')
+      if (err.name === 'AbortError' || err.name === 'CanceledError') {
+        setScrapingStatus('idle')
+        setScrapingProgress(0)
+        setScrapingError('Scraping cancelled by user')
+      } else {
+        setScrapingError(err.response?.data?.detail || err.message)
+        setScrapingStatus('error')
+      }
+      setScrapeAbortController(null)
     }
   }, [animeInfo, url, language, season, proxyUrl])
 
@@ -185,6 +212,16 @@ function App() {
       setSelectedEpisodes(new Set(episodes.map((_, i) => i)))
     }
   }
+
+  const cancelScrape = useCallback(() => {
+    if (scrapeAbortController) {
+      scrapeAbortController.abort()
+      setScrapeAbortController(null)
+      setScrapingStatus('idle')
+      setScrapingProgress(0)
+      setScrapingError('Scraping cancelled by user')
+    }
+  }, [])
 
   const generateDownloads = async () => {
     const selected = episodes.filter((_, i) => selectedEpisodes.has(i))
@@ -463,12 +500,22 @@ function App() {
           )
         ),
 
-        scrapingStatus === 'episodes' && React.createElement('div', { style: { marginBottom: '16px' } },
+        (scrapingStatus === 'anime' || scrapingStatus === 'episodes') && React.createElement('div', { style: { marginBottom: '16px' } },
           React.createElement('div', { className: 'progress-bar' },
             React.createElement('div', { className: 'progress-fill', style: { width: `${scrapingProgress}%` } })
           ),
-          React.createElement('p', { style: { textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', marginTop: '8px' } },
-            `Extracting video sources from ${episodes.length} episodes...`
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
+            React.createElement('p', { style: { color: 'var(--text-secondary)', fontSize: '13px' } },
+              scrapingStatus === 'anime' ? 'Fetching anime info...' : `Extracting video sources from ${episodes.length} episodes...`
+            ),
+            React.createElement('button', {
+              className: 'btn btn-secondary btn-sm',
+              onClick: cancelScrape,
+              disabled: ['idle', 'done', 'error'].includes(scrapingStatus)
+            },
+              React.createElement(Square, { size: 16 }),
+              ' Stop'
+            )
           )
         ),
 
