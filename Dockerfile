@@ -1,4 +1,6 @@
 # Multi-stage Dockerfile for Wcoflix Downloader
+# Build: force rebuild - setuptools fix
+ARG BUILD_DATE=2026-11-01
 # Build stage for frontend
 FROM node:20-alpine AS frontend-builder
 
@@ -45,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
+
+# Install setuptools for pkg_resources (required by cloudscraper in Python 3.12+)
+RUN pip install --no-cache-dir setuptools==81.0.0
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser
