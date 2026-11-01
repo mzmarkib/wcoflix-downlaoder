@@ -2,8 +2,8 @@
 # Build: force rebuild - setuptools fix
 ARG BUILD_DATE=2026-11-01
 # Build stage for frontend
-# Build: force rebuild - test-proxy fix
-ARG BUILD_DATE=2026-11-01
+# Build: force rebuild - fix Coolify proxy routing
+ARG BUILD_DATE=2026-11-01-2
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
