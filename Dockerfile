@@ -56,20 +56,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcursor1 \
     libxss1 \
     libxtst6 \
-    libxrandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install setuptools for pkg_resources (required by cloudscraper in Python 3.12+)
