@@ -61,11 +61,22 @@ class BrowserScraper:
                     proxy_config['username'] = parsed.username
                     proxy_config['password'] = parsed.password
             
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=launch_args,
-                proxy=proxy_config
-            )
+            # Try Firefox first (sometimes better for Cloudflare), fallback to Chromium
+            try:
+                self._browser = await self._playwright.firefox.launch(
+                    headless=True,
+                    args=launch_args,
+                    proxy=proxy_config
+                )
+                logger.info("Using Firefox for scraping")
+            except Exception as e:
+                logger.warning(f"Firefox launch failed, falling back to Chromium: {e}")
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=launch_args,
+                    proxy=proxy_config
+                )
+                logger.info("Using Chromium for scraping")
             
             self._context = await self._browser.new_context(
                 user_agent=settings.user_agent,
@@ -152,7 +163,7 @@ class BrowserScraper:
             await self._playwright.stop()
     
     async def _get_page(self, url: str) -> BeautifulSoup:
-        """Navigate to URL and return parsed HTML."""
+        """Navigate to URL and return parsed HTML with human-like behavior."""
         await self._ensure_browser()
         
         try:
@@ -165,6 +176,9 @@ class BrowserScraper:
             
             if not response or response.status >= 400:
                 raise ConnectionError(f"HTTP {response.status if response else 'No response'}")
+            
+            # Add human-like behavior: random mouse movements, scrolling
+            await self._simulate_human_behavior()
             
             # Wait for potential Cloudflare challenge
             await self._page.wait_for_load_state('domcontentloaded')
@@ -187,6 +201,40 @@ class BrowserScraper:
         except Exception as e:
             logger.error(f"Browser navigation failed for {url}: {e}")
             raise
+    
+    async def _simulate_human_behavior(self):
+        """Simulate human-like mouse movements and scrolling."""
+        if not self._page:
+            return
+            
+        try:
+            # Random mouse movements
+            import random
+            viewport = self._page.viewport_size
+            if viewport:
+                for _ in range(random.randint(2, 5)):
+                    x = random.randint(100, viewport['width'] - 100)
+                    y = random.randint(100, viewport['height'] - 100)
+                    await self._page.mouse.move(x, y, steps=random.randint(5, 15))
+                    await asyncio.sleep(random.uniform(0.1, 0.3))
+            
+            # Random scroll
+            await self._page.evaluate("""() => {
+                window.scrollTo({
+                    top: Math.random() * 500,
+                    behavior: 'smooth'
+                });
+            }""")
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            
+            # Scroll back up
+            await self._page.evaluate("""() => {
+                window.scrollTo({top: 0, behavior: 'smooth'});
+            }""")
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            
+        except Exception as e:
+            logger.debug(f"Human behavior simulation failed: {e}")
     
     async def _handle_cloudflare_challenge(self):
         """Attempt to resolve Cloudflare challenge by waiting and interacting."""
