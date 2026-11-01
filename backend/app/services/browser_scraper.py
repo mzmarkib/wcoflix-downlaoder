@@ -86,14 +86,54 @@ class BrowserScraper:
             self._page = await self._context.new_page()
             await stealth_async(self._page)
             
-            # Add additional stealth scripts
+            # Add comprehensive stealth scripts
             await self._page.add_init_script("""
+                // Hide webdriver
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                
+                // Mock plugins
+                Object.defineProperty(navigator, 'plugins', { 
+                    get: () => [
+                        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+                        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''},
+                        {name: 'Native Client', filename: 'internal-nacl-plugin', description: ''}
+                    ] 
+                });
+                
+                // Mock languages
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                window.chrome = { runtime: {} };
+                
+                // Mock chrome
+                window.chrome = { 
+                    runtime: {}, 
+                    loadTimes: function() {}, 
+                    csi: function() {}, 
+                    app: { isInstalled: false } 
+                };
+                
+                // Mock permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+                
+                // Mock device memory
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                
+                // Mock hardware concurrency
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                
+                // Mock screen
+                Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+                
+                // Remove automation indicators
+                delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+                delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+                delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
             """)
-
+            
             # Set up network request interception for video URLs
             async def handle_request(request):
                 if any(ext in request.url for ext in ['.m3u8', '.mp4', '.webm']):
@@ -119,7 +159,7 @@ class BrowserScraper:
             # Navigate with wait for network idle
             response = await self._page.goto(
                 url, 
-                wait_until='networkidle',
+                wait_until='domcontentloaded',
                 timeout=settings.request_timeout * 1000
             )
             
@@ -128,17 +168,18 @@ class BrowserScraper:
             
             # Wait for potential Cloudflare challenge
             await self._page.wait_for_load_state('domcontentloaded')
-            await asyncio.sleep(2)  # Let JS execute
+            await asyncio.sleep(3)  # Let JS execute
             
-            # Check for Cloudflare challenge
+            # Check for Cloudflare challenge and try to resolve it
             content = await self._page.content()
-            if 'challenge-platform' in content or 'cf-challenge' in content:
-                # Try to wait for challenge to complete
-                logger.info("Cloudflare challenge detected, waiting...")
-                await asyncio.sleep(10)
+            if 'challenge-platform' in content or 'cf-challenge' in content or 'Checking your browser' in content or 'Just a moment' in content:
+                # Try to wait for challenge to complete with longer timeout
+                logger.info("Cloudflare challenge detected, attempting to resolve...")
+                await self._handle_cloudflare_challenge()
+                
                 content = await self._page.content()
                 
-                if 'challenge-platform' in content:
+                if 'challenge-platform' in content or 'cf-challenge' in content:
                     raise ConnectionError("Cloudflare challenge not resolved")
             
             return BeautifulSoup(content, 'lxml')
@@ -146,6 +187,65 @@ class BrowserScraper:
         except Exception as e:
             logger.error(f"Browser navigation failed for {url}: {e}")
             raise
+    
+    async def _handle_cloudflare_challenge(self):
+        """Attempt to resolve Cloudflare challenge by waiting and interacting."""
+        if not self._page:
+            logger.warning("No page available for Cloudflare challenge handling")
+            return
+            
+        max_wait = 30  # seconds
+        check_interval = 2
+        waited = 0
+        
+        while waited < max_wait:
+            await asyncio.sleep(check_interval)
+            waited += check_interval
+            
+            content = await self._page.content()
+            
+            # Check if challenge is still present
+            if 'challenge-platform' not in content and 'cf-challenge' not in content:
+                logger.info(f"Cloudflare challenge resolved after {waited}s")
+                return
+            
+            # Try to find and click the checkbox if it exists
+            try:
+                # Common Cloudflare challenge selectors
+                checkbox_selectors = [
+                    'input[type="checkbox"]',
+                    '#challenge-stage input',
+                    '.cf-turnstile input',
+                    '[data-ray] input',
+                    'iframe[src*="challenge"] input',
+                ]
+                
+                for selector in checkbox_selectors:
+                    checkbox = await self._page.query_selector(selector)
+                    if checkbox:
+                        await checkbox.click()
+                        logger.info("Clicked Cloudflare checkbox")
+                        await asyncio.sleep(3)
+                        break
+            except Exception as e:
+                logger.debug(f"Could not interact with challenge: {e}")
+            
+            # Also try to wait for the challenge iframe to load and complete
+            try:
+                frames = self._page.frames
+                for frame in frames:
+                    if 'challenge' in frame.url or 'turnstile' in frame.url:
+                        logger.debug(f"Found challenge frame: {frame.url}")
+                        # Try to click in the frame
+                        try:
+                            await frame.click('input[type="checkbox"]', timeout=2000)
+                            await asyncio.sleep(2)
+                        except:
+                            pass
+            except Exception as e:
+                logger.debug(f"Frame interaction failed: {e}")
+        
+        logger.warning(f"Cloudflare challenge not resolved after {max_wait}s")
     
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
         """Sync wrapper for parse_anime_page_async - uses thread pool to avoid event loop conflicts."""
