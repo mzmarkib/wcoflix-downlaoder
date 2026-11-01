@@ -80,14 +80,24 @@ class CloudflareBypassScraper:
         except (ConnectionError, httpx.HTTPError, TimeoutError) as e:
             logger.warning(f"Cloudscraper failed ({type(e).__name__}: {e}), falling back to browser...")
             browser = self._get_browser_scraper()
-            # Call the equivalent browser method
-            browser_func = getattr(browser, func.__name__)
+            # Map cloudscraper method names to browser scraper method names
+            method_map = {
+                '_parse_anime_page_cloudscraper': 'parse_anime_page',
+                '_extract_video_sources_cloudscraper': 'extract_video_sources',
+            }
+            browser_method_name = method_map.get(func.__name__, func.__name__)
+            browser_func = getattr(browser, browser_method_name)
             return browser_func(*args, **kwargs)
         except Exception as e:
             logger.error(f"Unexpected error in cloudscraper: {e}")
             # Try browser as last resort
             browser = self._get_browser_scraper()
-            browser_func = getattr(browser, func.__name__)
+            method_map = {
+                '_parse_anime_page_cloudscraper': 'parse_anime_page',
+                '_extract_video_sources_cloudscraper': 'extract_video_sources',
+            }
+            browser_method_name = method_map.get(func.__name__, func.__name__)
+            browser_func = getattr(browser, browser_method_name)
             return browser_func(*args, **kwargs)
 
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
