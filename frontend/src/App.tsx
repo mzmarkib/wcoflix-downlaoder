@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { 
-  Search, Download, Loader2, CheckCircle, AlertCircle, 
+  Search, Download, Loader2, CheckCircle, AlertCircle, RefreshCw, 
   Info, FileText, Zap, Globe, ExternalLink, Settings, Wifi, WifiOff
 } from 'lucide-react'
 import axios from 'axios'
@@ -77,7 +77,11 @@ function App() {
   const [downloadResult, setDownloadResult] = useState<DownloadResult | null>(null)
   const [generatingDownloads, setGeneratingDownloads] = useState(false)
 
-  const availableSeasons = animeInfo?.seasons || [1]
+  const availableSeasons = animeInfo?.seasons || []
+  const hasScraped = animeInfo !== null
+  const hasMultipleSeasons = availableSeasons.length > 1
+  const hasNoSeasons = hasScraped && availableSeasons.length === 0
+  const hasSingleSeason = hasScraped && availableSeasons.length === 1
 
   useEffect(() => {
     setStoredProxy(proxyUrl)
@@ -158,7 +162,11 @@ function App() {
     if (animeInfo || !scrapingError) {
       await scrapeEpisodes()
     }
-  }, [scrapeAnime, scrapeEpisodes, animeInfo, scrapingError])
+  }, [scrapeAnime, scrapeEpisodes, animeInfo, scrapingError]);
+
+  const handleRescrape = useCallback(async () => {
+    await scrapeEpisodes()
+  }, [scrapeEpisodes]);
 
   const toggleEpisodeSelection = (index: number) => {
     const newSelected = new Set(selectedEpisodes)
@@ -351,31 +359,81 @@ function App() {
         
         React.createElement('div', { className: 'form-group' },
           React.createElement('label', { className: 'label', htmlFor: 'season' }, 'Season Filter'),
-          React.createElement('select', {
-            id: 'season',
-            className: 'select',
-            value: season,
-            onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSeason(e.target.value)
-          },
-            React.createElement('option', { value: 'all' }, 'All Seasons'),
-            availableSeasons.map((s: number) => React.createElement('option', { key: s, value: String(s) }, `Season ${s}`))
-          ),
-          availableSeasons.length > 1 && React.createElement('span', { style: { fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' } },
-            'Detected: ', availableSeasons.join(', ')
-          ),
-          React.createElement('div', { style: { marginTop: '8px', padding: '8px', background: 'var(--bg-primary)', borderRadius: '4px', fontSize: '12px', color: 'var(--text-secondary)' } },
-            React.createElement('strong', null, 'How filtering works: '), 
+          !hasScraped
+            ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                React.createElement('select', {
+                  id: 'season',
+                  className: 'select',
+                  value: season,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSeason(e.target.value),
+                  disabled: true
+                },
+                  React.createElement('option', { value: 'all' }, 'All Seasons (scrape first)')
+                ),
+                React.createElement('span', { className: 'badge badge-sub', style: { fontSize: '11px' } }, 'Scrape first')
+              )
+            : hasScraped
+            ? React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                React.createElement('select', {
+                  id: 'season',
+                  className: 'select',
+                  value: season,
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setSeason(e.target.value),
+                  disabled: !hasMultipleSeasons && !hasNoSeasons
+                },
+                  React.createElement('option', { value: 'all' }, 'All Seasons'),
+                  hasMultipleSeasons && availableSeasons.map((s: number) => React.createElement('option', { key: s, value: String(s) }, `Season ${s}`)),
+                  hasSingleSeason && React.createElement('option', { value: String(availableSeasons[0]) }, `Season ${availableSeasons[0]}`),
+                  hasNoSeasons && React.createElement('option', { value: 'all' }, 'No seasons detected (use All Seasons)')
+                ),
+                hasMultipleSeasons && React.createElement('span', { style: { fontSize: '12px', color: 'var(--text-secondary)' } },
+                  'Detected: ', availableSeasons.join(', ')
+                ),
+                hasNoSeasons && React.createElement('span', { className: 'badge badge-sub', style: { fontSize: '11px' } },
+                  'No seasons in URLs \u2014 use "All Seasons"'
+                ),
+                hasSingleSeason && React.createElement('span', { style: { fontSize: '12px', color: 'var(--text-secondary)' } },
+                  `Only Season ${availableSeasons[0]} detected`
+                )
+              )
+            : null,
+          React.createElement('div', { style: { marginTop: '8px', padding: '8px', background: 'var(--bg-primary)', borderRadius: '4px', fontSize: '12px', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' } },
+            React.createElement('strong', null, 'How season filtering works: '), 
             'The season parameter is sent to wcoflix.tv as ',
             React.createElement('code', null, '?season=X&lang=Y'), '. ',
-            'wcoflix.tv filters server-side. If an anime has no season in URLs (e.g., Chibi Godzilla), ',
-            'selecting a specific season returns empty \u2014 use "All Seasons" for those.'
+            'wcoflix.tv filters server-side. ',
+            React.createElement('strong', null, 'If an anime has no season in episode URLs (e.g., Chibi Godzilla), '),
+            'selecting a specific season returns empty \u2014 ',
+            React.createElement('strong', null, 'always use "All Seasons" for those.')
           )
         )
       ),
-      scrapingError && React.createElement('div', { className: 'alert alert-error' },
-        React.createElement(AlertCircle, { size: 20 }),
-        React.createElement('span', null, scrapingError)
-      )
+      scrapingError
+        ? React.createElement('div', { className: 'alert alert-error', style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+              React.createElement(AlertCircle, { size: 20 }),
+              React.createElement('span', null, scrapingError)
+            ),
+            (!proxyUrl && scrapingError.toLowerCase().includes('cloudflare'))
+              ? React.createElement('div', { className: 'alert', style: { background: 'rgba(210, 153, 34, 0.1)', borderColor: 'rgba(210, 153, 34, 0.3)', color: 'var(--warning)' } },
+                  React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                    React.createElement(AlertCircle, { size: 18 }),
+                    React.createElement('span', null, 'Cloudflare may be blocking requests. ', React.createElement('strong', null, 'Configure a residential proxy '), 'in Proxy Settings above for reliable scraping.')
+                  )
+                )
+              : null,
+            React.createElement('div', { style: { display: 'flex', gap: '8px' } },
+              React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: handleScrape, disabled: scrapingStatus !== 'idle' && scrapingStatus !== 'done' },
+                React.createElement(RefreshCw, { size: 16 }), ' Retry'
+              ),
+              hasScraped
+                ? React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: handleRescrape, disabled: scrapingStatus === 'episodes' },
+                    React.createElement(RefreshCw, { size: 16 }), ' Re-scan Episodes'
+                  )
+                : null
+            )
+          )
+        : null
     )
   )
 
