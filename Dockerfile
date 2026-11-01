@@ -21,7 +21,7 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Install Playwright browsers in builder stage (without --with-deps to avoid font issues)
-RUN python -m playwright install chromium
+RUN python -m playwright install chromium firefox
 
 # Final stage
 FROM python:3.12-slim
