@@ -86,7 +86,7 @@ class CloudflareBypassScraper:
                 '_extract_video_sources_cloudscraper': 'extract_video_sources',
             }
             browser_method_name = method_map.get(func.__name__, func.__name__)
-            browser_func = getattr(browser, browser_method_name)
+            browser_func = getattr(browser, browser_method_name or func.__name__)
             return browser_func(*args, **kwargs)
         except Exception as e:
             logger.error(f"Unexpected error in cloudscraper: {e}")
@@ -97,7 +97,7 @@ class CloudflareBypassScraper:
                 '_extract_video_sources_cloudscraper': 'extract_video_sources',
             }
             browser_method_name = method_map.get(func.__name__, func.__name__)
-            browser_func = getattr(browser, browser_method_name)
+            browser_func = getattr(browser, browser_method_name or func.__name__)
             return browser_func(*args, **kwargs)
 
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
