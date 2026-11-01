@@ -11,4 +11,4 @@ aiofiles==24.1.0
 tenacity==8.5.0
 cloudscraper==1.2.71
 playwright==1.44.0
-playwright-stealth==1.0.0
+playwright-stealth==1.0.6

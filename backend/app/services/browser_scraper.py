@@ -1,162 +1,153 @@
 """
-Browser-based scraper using Playwright with stealth mode.
-Used as fallback when cloudscraper fails or no proxy available.
+Playwright-based browser scraper with stealth mode for Cloudflare bypass.
+Used as fallback when cloudscraper fails (no proxy, or proxy blocked).
 """
 import asyncio
 import logging
 import re
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
-from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
+from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
+
+from app.core.config import settings
 from app.models.schemas import EpisodeInfo, AnimeInfo, Language, VideoSource, EpisodeDownloadInfo
 
 logger = logging.getLogger(__name__)
 
-# Global browser instance for reuse
-_browser = None
-_playwright = None
-
-
-async def _get_browser():
-    """Get or create Playwright browser instance with stealth."""
-    global _browser, _playwright
-    
-    if _browser and _browser.is_connected():
-        return _browser
-    
-    try:
-        from playwright.async_api import async_playwright
-        from playwright_stealth import stealth_async
-    except ImportError:
-        logger.warning("Playwright not available, browser scraping disabled")
-        return None
-    
-    _playwright = await async_playwright().start()
-    
-    # Launch browser with realistic fingerprint
-    _browser = await _playwright.chromium.launch(
-        headless=True,
-        args=[
-            '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        ]
-    )
-    
-    return _browser
-
-
-async def _create_stealth_page(browser, proxy_url: Optional[str] = None):
-    """Create a new page with stealth mode enabled."""
-    from playwright_stealth import stealth_async
-    
-    context_options = {
-        'viewport': {'width': 1920, 'height': 1080},
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'locale': 'en-US',
-        'timezone_id': 'America/New_York',
-        'permissions': [],
-        'extra_http_headers': {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        }
-    }
-    
-    if proxy_url:
-        context_options['proxy'] = {'server': proxy_url}
-    
-    context = await browser.new_context(**context_options)
-    page = await context.new_page()
-    
-    # Apply stealth
-    await stealth_async(page)
-    
-    # Additional anti-detection
-    await page.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-        window.chrome = { runtime: {} };
-    """)
-    
-    return page, context
-
 
 class BrowserScraper:
-    """Playwright-based scraper with stealth mode for Cloudflare bypass."""
+    """
+    Full browser automation with Playwright + stealth for Cloudflare bypass.
+    Slower than cloudscraper but handles JS challenges, cookies, TLS fingerprints.
+    """
     
     def __init__(self, proxy_url: Optional[str] = None):
         self.proxy_url = proxy_url
+        self._playwright = None
         self._browser = None
+        self._context = None
+        self._page = None
+        self._intercepted_urls = []  # Capture network requests for video URLs
     
-    async def __aenter__(self):
-        self._browser = await _get_browser()
-        return self
+    async def _ensure_browser(self):
+        """Lazy-initialize browser with stealth."""
+        if self._browser is None:
+            self._playwright = await async_playwright().start()
+            
+            # Launch args for better Cloudflare evasion
+            launch_args = [
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--user-agent=' + settings.user_agent,
+            ]
+            
+            proxy_config = None
+            if self.proxy_url:
+                # Parse proxy URL for Playwright
+                import urllib.parse
+                parsed = urllib.parse.urlparse(self.proxy_url)
+                proxy_config = {
+                    'server': f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
+                }
+                if parsed.username and parsed.password:
+                    proxy_config['username'] = parsed.username
+                    proxy_config['password'] = parsed.password
+            
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=launch_args,
+                proxy=proxy_config
+            )
+            
+            self._context = await self._browser.new_context(
+                user_agent=settings.user_agent,
+                viewport={'width': 1920, 'height': 1080},
+                locale='en-US',
+                timezone_id='America/New_York',
+                permissions=[],
+                extra_http_headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+            )
+            
+            # Apply stealth to avoid detection
+            self._page = await self._context.new_page()
+            await stealth_async(self._page)
+            
+            # Add additional stealth scripts
+            await self._page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                window.chrome = { runtime: {} };
+            """)
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass  # Browser is globally managed
+    async def close(self):
+        """Clean up browser resources."""
+        if self._page:
+            await self._page.close()
+        if self._context:
+            await self._context.close()
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()
     
-    async def _fetch_page(self, url: str, wait_for: str = 'networkidle') -> str:
-        """Fetch page content using Playwright with stealth."""
-        if not self._browser:
-            raise RuntimeError("Browser not initialized")
-        
-        page, context = await _create_stealth_page(self._browser, self.proxy_url)
+    async def _get_page(self, url: str) -> BeautifulSoup:
+        """Navigate to URL and return parsed HTML."""
+        await self._ensure_browser()
         
         try:
-            logger.info(f"Browser fetching: {url}")
+            # Navigate with wait for network idle
+            response = await self._page.goto(
+                url, 
+                wait_until='networkidle',
+                timeout=settings.request_timeout * 1000
+            )
             
-            # Navigate with timeout
-            response = await page.goto(url, wait_until=wait_for, timeout=60000)
+            if not response or response.status >= 400:
+                raise ConnectionError(f"HTTP {response.status if response else 'No response'}")
             
-            if not response:
-                raise ConnectionError(f"Failed to load {url}")
+            # Wait for potential Cloudflare challenge
+            await self._page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(2)  # Let JS execute
             
             # Check for Cloudflare challenge
-            content = await page.content()
-            if self._is_cloudflare_challenge(content, page):
-                # Wait a bit more for challenge to resolve
-                await page.wait_for_timeout(5000)
-                content = await page.content()
+            content = await self._page.content()
+            if 'challenge-platform' in content or 'cf-challenge' in content:
+                # Try to wait for challenge to complete
+                logger.info("Cloudflare challenge detected, waiting...")
+                await asyncio.sleep(10)
+                content = await self._page.content()
                 
-                if self._is_cloudflare_challenge(content, page):
+                if 'challenge-platform' in content:
                     raise ConnectionError("Cloudflare challenge not resolved")
             
-            # Wait for dynamic content
-            await page.wait_for_timeout(2000)
+            return BeautifulSoup(content, 'lxml')
             
-            # Get final content
-            content = await page.content()
-            return content
-            
-        finally:
-            await context.close()
-    
-    def _is_cloudflare_challenge(self, content: str, page) -> bool:
-        """Check if page is Cloudflare challenge."""
-        if len(content) < 5000:
-            if 'challenge-platform' in content or 'cf-challenge' in content:
-                return True
-            if 'Cloudflare' in content and 'challenge' in content.lower():
-                return True
-        return False
+        except Exception as e:
+            logger.error(f"Browser navigation failed for {url}: {e}")
+            raise
     
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
-        """Parse anime page using browser."""
-        # Build filtered URL
+        """Sync wrapper for parse_anime_page_async."""
+        return asyncio.run(self._parse_anime_page_async(url, language, season))
+    
+    async def _parse_anime_page_async(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
+        from urllib.parse import urlparse
+        
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         
@@ -166,36 +157,30 @@ class BrowserScraper:
         if language != Language.all:
             params.append(f"lang={language.value}")
         
-        filtered_url = base_url + ("?" + "&".join(params) if params else "")
+        filtered_url = base_url
+        if params:
+            filtered_url += "?" + "&".join(params)
         
-        # Run async in sync context
-        content = asyncio.run(self._fetch_page(filtered_url))
-        soup = BeautifulSoup(content, 'lxml')
+        logger.info(f"Fetching anime page (browser): {filtered_url}")
+        soup = await self._get_page(filtered_url)
         
-        return self._parse_anime_html(soup, filtered_url, language)
+        return self._parse_anime_html(soup, language)
     
-    def _parse_anime_html(self, soup: BeautifulSoup, url: str, language: Language) -> AnimeInfo:
-        """Parse anime info from HTML (same logic as cloudscraper)."""
-        # Extract title
+    def _parse_anime_html(self, soup: BeautifulSoup, language: Language) -> AnimeInfo:
+        """Shared HTML parsing logic."""
         title_elem = soup.select_one('h1, h2, .anime-title, .entry-title')
         title = title_elem.get_text(strip=True) if title_elem else "Unknown Anime"
         
-        # Cover image
         cover_elem = soup.select_one('img[src*="wcostream"], img[src*="catimg"], .anime-cover img, .poster img')
         cover_url = cover_elem.get('src') if cover_elem else None
         
-        # Description
         desc_elem = soup.select_one('.anime-description, .entry-content, .description, .synopsis')
         description = desc_elem.get_text(strip=True) if desc_elem else None
         
-        # Genres
         genre_elems = soup.select('a[href*="genre"], .genre a, .genres a')
         genres = [g.get_text(strip=True) for g in genre_elems]
         
-        # Detect seasons
         detected_seasons = self._detect_seasons(soup)
-        
-        # Extract episodes
         episodes = self._extract_episodes(soup, language)
         
         return AnimeInfo(
@@ -209,10 +194,8 @@ class BrowserScraper:
         )
     
     def _detect_seasons(self, soup: BeautifulSoup) -> List[int]:
-        """Detect available seasons from page."""
         seasons = set()
         
-        # Method 1: Season tabs/buttons
         season_tabs = soup.select('[data-season], .season-tab, .season-btn, .season-filter a, [href*="season="]')
         for tab in season_tabs:
             data_season = tab.get('data-season')
@@ -229,7 +212,6 @@ class BrowserScraper:
             if season_match:
                 seasons.add(int(season_match.group(1)))
         
-        # Method 2: From episode URLs
         episode_links = soup.select('a[href*="episode"]')
         for link in episode_links:
             href = link.get('href', '')
@@ -243,7 +225,6 @@ class BrowserScraper:
         return sorted(seasons)
     
     def _extract_episodes(self, soup: BeautifulSoup, language: Language) -> List[EpisodeInfo]:
-        """Extract episode links."""
         episodes = []
         episode_links = soup.select('a[href*="episode"]')
         
@@ -267,7 +248,6 @@ class BrowserScraper:
         return episodes
     
     def _parse_episode_info(self, url: str, text: str, language: Language) -> Optional[EpisodeInfo]:
-        """Parse episode info from URL and text."""
         season_match = re.search(r'season[_-]?(\d+)', url, re.IGNORECASE)
         episode_match = re.search(r'episode[_-]?(\d+)', url, re.IGNORECASE)
         
@@ -306,9 +286,12 @@ class BrowserScraper:
         )
     
     def extract_video_sources(self, episode_url: str) -> List[VideoSource]:
-        """Extract video sources from episode page."""
-        content = asyncio.run(self._fetch_page(episode_url, wait_for='domcontentloaded'))
-        soup = BeautifulSoup(content, 'lxml')
+        """Sync wrapper for extract_video_sources_async."""
+        return asyncio.run(self._extract_video_sources_async(episode_url))
+    
+    async def _extract_video_sources_async(self, episode_url: str) -> List[VideoSource]:
+        logger.info(f"Fetching episode page (browser): {episode_url}")
+        soup = await self._get_page(episode_url)
         
         sources = []
         
@@ -316,39 +299,33 @@ class BrowserScraper:
         for video in soup.select('video source, video'):
             src = video.get('src') or video.get('data-src')
             if src:
-                sources.append(VideoSource(
-                    quality=self._guess_quality(src),
-                    url=src,
-                    type=self._get_source_type(src)
-                ))
+                sources.append(VideoSource(quality=self._guess_quality(src), url=src, type=self._get_source_type(src)))
         
         # Method 2: Iframes (embedded players)
         for iframe in soup.select('iframe'):
             src = iframe.get('src') or iframe.get('data-src')
-            if src and any(d in src for d in ['wcostream', 'vidstream', 'stream', 'embed', 'player']):
+            if src and any(d in src for d in ['wcostream', 'vidstream', 'stream', 'embed']):
                 sources.append(VideoSource(quality="Auto", url=src, type="embed"))
         
         # Method 3: Download links
         for link in soup.select('a[href*=".mp4"], a[href*=".m3u8"], a[href*="download"], a[href*="dl."]'):
             href = link.get('href')
             if href:
-                sources.append(VideoSource(
-                    quality=self._guess_quality(href),
-                    url=href,
-                    type=self._get_source_type(href)
-                ))
+                sources.append(VideoSource(quality=self._guess_quality(href), url=href, type=self._get_source_type(href)))
         
-        # Method 4: JavaScript/JSON data
+        # Method 4: Scripts with video URLs
         scripts = soup.find_all('script')
         for script in scripts:
             if script.string:
                 urls = re.findall(r'https?://[^\s"\']+\.(?:m3u8|mp4|webm)', script.string)
-                for u in urls:
-                    sources.append(VideoSource(
-                        quality=self._guess_quality(u),
-                        url=u,
-                        type=self._get_source_type(u)
-                    ))
+                for url in urls:
+                    sources.append(VideoSource(quality=self._guess_quality(url), url=url, type=self._get_source_type(url)))
+        
+        # Method 5: Network requests (intercepted during page load)
+        if hasattr(self, '_intercepted_urls') and self._intercepted_urls:
+            for url in self._intercepted_urls:
+                if any(ext in url for ext in ['.m3u8', '.mp4', '.webm']):
+                    sources.append(VideoSource(quality=self._guess_quality(url), url=url, type=self._get_source_type(url)))
         
         # Deduplicate
         seen = set()
@@ -379,30 +356,9 @@ class BrowserScraper:
         return 'embed'
     
     def get_episode_download_info(self, episode: EpisodeInfo) -> EpisodeDownloadInfo:
-        """Get full download info for an episode."""
-        try:
-            sources = self.extract_video_sources(str(episode.url))
-            return EpisodeDownloadInfo(episode=episode, video_sources=sources)
-        except Exception as e:
-            logger.error(f"Error extracting video sources for {episode.url}: {e}")
-            return EpisodeDownloadInfo(episode=episode, video_sources=[], error=str(e))
-
-
-# Convenience function for sync usage
-def scrape_with_browser(url: str, language: Language = Language.sub, season: str = "all", proxy_url: Optional[str] = None) -> AnimeInfo:
-    """Synchronous wrapper for browser scraping."""
-    scraper = BrowserScraper(proxy_url=proxy_url)
-    return scraper.parse_anime_page(url, language, season)
-
-
-def scrape_episodes_with_browser(url: str, language: Language = Language.sub, season: str = "all", proxy_url: Optional[str] = None) -> List[EpisodeDownloadInfo]:
-    """Scrape anime page and extract video sources for all episodes."""
-    scraper = BrowserScraper(proxy_url=proxy_url)
-    anime = scraper.parse_anime_page(url, language, season)
-    
-    results = []
-    for episode in anime.episodes:
-        ep_info = scraper.get_episode_download_info(episode)
-        results.append(ep_info)
-    
-    return results
+            try:
+                sources = self.extract_video_sources(str(episode.url))
+                return EpisodeDownloadInfo(episode=episode, video_sources=sources)
+            except Exception as e:
+                logger.error(f"Error extracting video sources for {episode.url}: {e}")
+                return EpisodeDownloadInfo(episode=episode, video_sources=[], error=str(e))
