@@ -93,6 +93,12 @@ class BrowserScraper:
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
                 window.chrome = { runtime: {} };
             """)
+
+            # Set up network request interception for video URLs
+            async def handle_request(request):
+                if any(ext in request.url for ext in ['.m3u8', '.mp4', '.webm']):
+                    self._intercepted_urls.append(request.url)
+            self._page.on('request', handle_request)
     
     async def close(self):
         """Clean up browser resources."""
@@ -142,8 +148,11 @@ class BrowserScraper:
             raise
     
     def parse_anime_page(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
-        """Sync wrapper for parse_anime_page_async."""
-        return asyncio.run(self._parse_anime_page_async(url, language, season))
+        """Sync wrapper for parse_anime_page_async - uses thread pool to avoid event loop conflicts."""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, self._parse_anime_page_async(url, language, season))
+            return future.result()
     
     async def _parse_anime_page_async(self, url: str, language: Language = Language.sub, season: str = "all") -> AnimeInfo:
         from urllib.parse import urlparse
@@ -286,8 +295,11 @@ class BrowserScraper:
         )
     
     def extract_video_sources(self, episode_url: str) -> List[VideoSource]:
-        """Sync wrapper for extract_video_sources_async."""
-        return asyncio.run(self._extract_video_sources_async(episode_url))
+        """Sync wrapper for extract_video_sources_async - uses thread pool to avoid event loop conflicts."""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, self._extract_video_sources_async(episode_url))
+            return future.result()
     
     async def _extract_video_sources_async(self, episode_url: str) -> List[VideoSource]:
         logger.info(f"Fetching episode page (browser): {episode_url}")
@@ -356,9 +368,9 @@ class BrowserScraper:
         return 'embed'
     
     def get_episode_download_info(self, episode: EpisodeInfo) -> EpisodeDownloadInfo:
-            try:
-                sources = self.extract_video_sources(str(episode.url))
-                return EpisodeDownloadInfo(episode=episode, video_sources=sources)
-            except Exception as e:
-                logger.error(f"Error extracting video sources for {episode.url}: {e}")
-                return EpisodeDownloadInfo(episode=episode, video_sources=[], error=str(e))
+        try:
+            sources = self.extract_video_sources(str(episode.url))
+            return EpisodeDownloadInfo(episode=episode, video_sources=sources)
+        except Exception as e:
+            logger.error(f"Error extracting video sources for {episode.url}: {e}")
+            return EpisodeDownloadInfo(episode=episode, video_sources=[], error=str(e))
