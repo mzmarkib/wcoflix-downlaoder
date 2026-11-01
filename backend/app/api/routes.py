@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from typing import List, Optional
 import logging
 import uuid
@@ -8,8 +8,9 @@ from app.models.schemas import (
     ScrapeRequest, AnimeInfo, EpisodeDownloadInfo, 
     BatchDownloadRequest, BatchDownloadResponse, Language
 )
-from app.services.scraper import scraper
+from app.services.scraper import scraper, CloudflareBypassScraper
 from app.services.download_generator import DownloadFileGenerator
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -117,26 +118,6 @@ async def generate_downloads(request: BatchDownloadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/download/{job_id}/{format_type}")
-async def download_file(job_id: str, format_type: str):
-    """Download a generated batch file."""
-    from fastapi.responses import FileResponse
-    
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = jobs[job_id]
-    if format_type not in job['files']:
-        raise HTTPException(status_code=404, detail="Format not found")
-    
-    file_info = job['files'][format_type]
-    return FileResponse(
-        path=file_info['path'],
-        filename=file_info['filename'],
-        media_type='application/octet-stream'
-    )
-
-
 @router.get("/download/{job_id}/zip")
 async def download_zip(job_id: str):
     """Download all formats as a zip file."""
@@ -164,6 +145,66 @@ async def download_zip(job_id: str):
     )
 
 
+@router.get("/download/{job_id}/{format_type}")
+async def download_file(job_id: str, format_type: str):
+    """Download a generated batch file."""
+    from fastapi.responses import FileResponse
+    
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[job_id]
+    if format_type not in job['files']:
+        raise HTTPException(status_code=404, detail="Format not found")
+    
+    file_info = job['files'][format_type]
+    return FileResponse(
+        path=file_info['path'],
+        filename=file_info['filename'],
+        media_type='application/octet-stream'
+    )
+
+
 @router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "wcoflix-downloader"}
+
+
+@router.get("/test-proxy")
+async def test_proxy(proxy_url: Optional[str] = Query(None)):
+    """Test if a proxy can reach wcoflix.tv."""
+    import httpx
+    
+    test_url = "https://www.wcoflix.tv"
+    proxy = proxy_url or settings.proxy_url
+    
+    try:
+        test_scraper = CloudflareBypassScraper(proxy_url=proxy) if proxy else scraper
+        # Just test basic connectivity
+        session = test_scraper._cloudscraper
+        if proxy:
+            session.proxies = {'http': proxy, 'https': proxy}
+        
+        response = session.get(test_url, timeout=10)
+        response.raise_for_status()
+        
+        # Check if we got a real page (not Cloudflare challenge)
+        if 'challenge-platform' in response.text or 'Cloudflare' in response.text:
+            if len(response.text) < 5000 and 'challenge' in response.text.lower():
+                return {"status": "cloudflare_challenge", "message": "Proxy reached wcoflix but hit Cloudflare challenge"}
+        
+        return {"status": "connected", "message": "Proxy can reach wcoflix.tv"}
+    except httpx.ProxyError as e:
+        return {"status": "proxy_error", "message": f"Proxy connection failed: {str(e)}"}
+    except httpx.ConnectError as e:
+        return {"status": "connection_error", "message": f"Cannot connect via proxy: {str(e)}"}
+    except httpx.TimeoutException:
+        return {"status": "timeout", "message": "Proxy request timed out"}
+    except Exception as e:
+        return {"status": "error", "message": f"Proxy test failed: {str(e)}"}
+
+
+@router.get("/test-proxy-debug")
+async def test_proxy_debug():
+    """Debug test endpoint."""
+    return {"status": "debug", "message": "Test proxy debug endpoint works"}
