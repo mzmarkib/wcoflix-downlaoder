@@ -24,8 +24,8 @@ def _get_scraper(proxy_url: Optional[str] = None):
     """Get scraper instance with optional proxy override."""
     if proxy_url:
         # Create a new scraper with the proxy
-        from app.services.scraper import WcoflixScraper
-        return WcoflixScraper(proxy_url=proxy_url)
+        from app.services.scraper import CloudflareBypassScraper
+        return CloudflareBypassScraper(proxy_url=proxy_url)
     return scraper
 
 
